@@ -7,6 +7,10 @@ set(CMAKE_CXX_STANDARD 17)
 
 add_subdirectory(tests)
 
+find_package(Eigen3 REQUIRED)
 
+target_include_directories(TESTs PRIVATE ${EIGEN3_INCLUDE_DIRS})
+
+set(CMAKE_CXX_FLAGS "-g")
 target_include_directories(TESTs PRIVATE src)
 
