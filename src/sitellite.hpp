@@ -40,7 +40,7 @@ Cartesian toCartesian(const Keplerian& keplerian, const double gravParam) noexce
 
 
 Keplerian toKeplerian(const Cartesian& cartesian, const double gravParam) noexcept {
-	const double velSqr = cartesian.velocity.squaredNorm();
+    const double velSqr = cartesian.velocity.squaredNorm();
 	const double vel = std::sqrt(velSqr);
 	const double positionNorm = cartesian.position.norm();
 	const double muDivR = gravParam / positionNorm;
@@ -60,9 +60,8 @@ Keplerian toKeplerian(const Cartesian& cartesian, const double gravParam) noexce
 const Keplerian maneuver(const Cartesian& cartesian, const Eigen::Vector2d& delta_velocity, const double gravParam) noexcept{
     Cartesian new_cartesian = cartesian;
     new_cartesian.velocity += delta_velocity;    
-    Keplerian keplerian = toKeplerian(new_cartesian, gravParam);
     
-    return keplerian;
+    return toKeplerian(new_cartesian, gravParam);
 }
 
 
