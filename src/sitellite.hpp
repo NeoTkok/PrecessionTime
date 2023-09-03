@@ -3,8 +3,16 @@
 
 #include <Eigen/Dense>
 #include <cmath>
+#include <optional>
+#include <limits>
 
 using Vector2d = Eigen::Vector<double, 2>;
+
+struct Earth{
+    double J2 = 1.082'626'68 * 1e-3;
+    double Re = 6'378'137;
+    double GM = 3.986'004'418'888'88 * 1e14;  
+};
 
 struct Cartesian{
     Vector2d position;
@@ -39,52 +47,121 @@ Cartesian toCartesian(const Keplerian& keplerian, const double gravParam) noexce
 }
 
 
-Keplerian toKeplerian(const Cartesian& cartesian, const double gravParam) noexcept {
+std::optional<Keplerian> toKeplerian(const Cartesian& cartesian, const double gravParam) noexcept{
     const double velSqr = cartesian.velocity.squaredNorm();
 	const double vel = std::sqrt(velSqr);
 	const double positionNorm = cartesian.position.norm();
 	const double muDivR = gravParam / positionNorm;
 	const Vector2d eccVector = ((velSqr - muDivR) * cartesian.position - cartesian.velocity.dot(cartesian.position) * cartesian.velocity) / gravParam;
-	const double ecc = eccVector.norm();
-	const double periapsisArgument = (ecc != 0) ? std::atan2(eccVector.y(), eccVector.x()) : 0;
 
+
+    const double ecc = eccVector.norm();  // may be optional?
+    if (ecc >= 1){
+        return std::nullopt;
+    }
+
+	const double periapsisArgument = (ecc != 0) ? std::atan2(eccVector.y(), eccVector.x()) : 0;
 	const Vector2d e1 = ecc != 0 ? eccVector / ecc : Vector2d{1, 0};
 	const Vector2d e2(-e1.y(), e1.x());
-	const double anomalyly = std::atan2(cartesian.position.dot(e2), cartesian.position.dot(e1));
+	const double anomaly = std::atan2(cartesian.position.dot(e2), cartesian.position.dot(e1));
 	const double semimajor = gravParam / (2 * muDivR - velSqr);
-    
-	return {semimajor, ecc, periapsisArgument, anomalyly};
+    Keplerian keplerian = {semimajor, ecc, periapsisArgument, anomaly};
+    return keplerian;
 }
 
 
-const Keplerian maneuver(const Cartesian& cartesian, const Eigen::Vector2d& delta_velocity, const double gravParam) noexcept{
+std::optional<Keplerian> maneuver(const Cartesian& cartesian, const Eigen::Vector2d& delta_velocity, const double gravParam){
     Cartesian new_cartesian = cartesian;
     new_cartesian.velocity += delta_velocity;    
-    
-    return toKeplerian(new_cartesian, gravParam);
+    std::optional<Keplerian> keplerian = toKeplerian(new_cartesian, gravParam);
+    return keplerian;
 }
-
 
 const double precession_rate(const double sem_axis, const double ecc, const double i,
-                        const double Re, const double J2, const double gravParam) noexcept{
-    const double ReDivP = Re / sem_axis / (1 - ecc * ecc);
-    return -3. * ReDivP * ReDivP / sem_axis * std::sqrt(gravParam/sem_axis) * J2 * std::cos(i) / 2.;
+                        const Earth& earth) noexcept{
+    const double ReDivP = earth.Re / sem_axis / (1 - ecc * ecc);
+    return -3 * ReDivP * ReDivP / sem_axis * std::sqrt(earth.GM/sem_axis) * earth.J2 * std::cos(i) / 2;
 }
 
+struct Orbit {
+    Cartesian inPlane;
+    double inclination;
+};  
 
-double T_maneuver(const Cartesian& cartesian, const Eigen::Vector2d& dv, const double DeltaOmega,
-                const double i, const double Re, const double J2, const double gravParam) noexcept{
-    const Keplerian keplerian = toKeplerian(cartesian,gravParam);
-    const double omegaDot = precession_rate(keplerian.sem_axis, keplerian.eccentricity, i, Re, J2, gravParam);
+std::optional<double> T_maneuver(const Keplerian& keplerian, const Orbit& orbit, const Eigen::Vector2d& dv,
+                        const double DeltaOmega, const Earth& earth) noexcept{
     
-    const Keplerian new_keplerian = maneuver(cartesian, dv, gravParam);
-    const double new_omegaDot = precession_rate(new_keplerian.sem_axis, new_keplerian.eccentricity, i, Re, J2, gravParam);
-        
-    const double delta_omegaDot = new_omegaDot - omegaDot;
-    const double k = (delta_omegaDot * DeltaOmega < 0) ? delta_omegaDot / std::abs(delta_omegaDot) : 0;
+    const std::optional<Keplerian> newKeplerian = maneuver(orbit.inPlane, dv, earth.GM);
 
-    return (delta_omegaDot != 0) ? (DeltaOmega + k * 2 * M_PI) / delta_omegaDot : -1;
+    if (newKeplerian == std::nullopt){
+        return std::nullopt;
+    }
+
+    const double OmegaDot = precession_rate(keplerian.sem_axis, keplerian.eccentricity, orbit.inclination, earth);
+    const double newOmegaDot = precession_rate(newKeplerian->sem_axis, newKeplerian->eccentricity, orbit.inclination, earth);
+    const double deltaOmegaDot = newOmegaDot - OmegaDot;
+    
+    const double k = (deltaOmegaDot * DeltaOmega < 0) ? deltaOmegaDot / std::abs(deltaOmegaDot) : 0;
+    return (DeltaOmega + k * 2 * M_PI) / deltaOmegaDot;
+}   
+
+struct ReturnValue{
+    double minTime = std::numeric_limits<double>::infinity();
+    double anomaly = std::numeric_limits<double>::quiet_NaN();
+    Vector2d dv = {std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN()};
+};
+
+struct AlgoParameters{
+    int nAnomaly;
+    int nAngle;
+    int nVelocity;
+    double maxVel;
+};
+
+std::vector<ReturnValue> time_precession(const Orbit& orbit, const double DeltaOmega,
+                        const Earth& earth, const AlgoParameters& algParams) noexcept{
+
+    std::vector<ReturnValue> result(algParams.nVelocity);
+    const std::optional<Keplerian> keplerian = toKeplerian(orbit.inPlane, earth.GM);
+
+    if (keplerian == std::nullopt){
+        return result;
+    }
+
+    const double delta_alpha = 2 * M_PI / algParams.nAnomaly;
+    const double delta_anomaly = 2 * M_PI / algParams.nAngle;
+    const double delta_vel = algParams.maxVel / algParams.nVelocity;
+
+    for (int i_nu = 0; i_nu < algParams.nAnomaly; ++i_nu){ 
+        const double nu = delta_anomaly * i_nu;
+        const Keplerian newKeplerian = {keplerian->sem_axis, keplerian->eccentricity, keplerian->arg_peri, nu};
+        const Cartesian newCartesian = toCartesian(newKeplerian, earth.GM);
+        for (int i_vel = 0; i_vel < algParams.nVelocity; ++i_vel){ // поменять циклы местами
+            const double absV = delta_vel * i_vel;
+
+            for (int i_alpha = 0; i_alpha < algParams.nAngle; ++i_alpha){
+                const double alpha = i_alpha * delta_alpha;
+
+                const double Vx = absV * cos(alpha);
+                const double Vy = absV * sin(alpha);
+
+                const std::optional<double> t = T_maneuver(newKeplerian, {newCartesian, orbit.inclination}, {Vx, Vy}, DeltaOmega, earth); 
+                
+
+                if (*t < result[i_vel].minTime && t != std::nullopt){
+                    result[i_vel].minTime = *t; 
+                    result[i_vel].anomaly = nu;
+                    result[i_vel].dv.x() = Vx;
+                    result[i_vel].dv.y() = Vy;
+                }
+
+            }
+        }    
+    }
+    return result;
+
 }
+
 
 
 #endif 
