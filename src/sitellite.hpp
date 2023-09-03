@@ -71,9 +71,7 @@ std::optional<Keplerian> toKeplerian(const Cartesian& cartesian, const double gr
 
 
 Cartesian maneuver(const Cartesian& cartesian, const Eigen::Vector2d& delta_velocity){
-    Cartesian newCartesian = cartesian;
-    newCartesian.velocity += delta_velocity;    
-    return newCartesian;
+    return {cartesian.position, cartesian.velocity + delta_velocity};
 }
 
 const double precession_rate(const double sem_axis, const double ecc, const double i,
@@ -132,27 +130,23 @@ std::vector<ReturnValue> time_precession(const OrbitKeplerian& orbitKepl, const 
     const double delta_anomaly = 2 * M_PI / algParams.nAngle;
     const double delta_vel = algParams.maxVel / algParams.nVelocity;
 
-    for (int i_nu = 0; i_nu < algParams.nAnomaly; ++i_nu){ 
+    for (unsigned int i_nu = 0; i_nu < algParams.nAnomaly; ++i_nu){ 
         const double nu = delta_anomaly * i_nu;
         const Keplerian newKeplerian = {orbitKepl.inPlane.sem_axis, orbitKepl.inPlane.eccentricity, orbitKepl.inPlane.arg_peri, nu};
         const Cartesian newCartesian = toCartesian(newKeplerian, earth.GM);
-        for (int i_vel = 0; i_vel < algParams.nVelocity; ++i_vel){
+        for (unsigned int i_vel = 0; i_vel < algParams.nVelocity; ++i_vel){
             const double absV = delta_vel * i_vel;
 
-            for (int i_alpha = 0; i_alpha < algParams.nAngle; ++i_alpha){
+            for (unsigned int i_alpha = 0; i_alpha < algParams.nAngle; ++i_alpha){
                 const double alpha = i_alpha * delta_alpha;
 
-                const double Vx = absV * std::cos(alpha);
-                const double Vy = absV * std::sin(alpha);
-
-                const std::optional<double> t = T_maneuver(newKeplerian, {newCartesian, orbitKepl.inclination}, {Vx, Vy}, DeltaOmega, earth); 
-                
+                const Vector2d Vel = {absV * std::cos(alpha), absV * std::sin(alpha)};
+                const std::optional<double> t = T_maneuver(newKeplerian, {newCartesian, orbitKepl.inclination}, Vel, DeltaOmega, earth); 
                 
                 if (t.has_value() && *t < result[i_vel].minTime){  
                     result[i_vel].minTime = *t; 
                     result[i_vel].anomaly = nu;
-                    result[i_vel].dv.x() = Vx;
-                    result[i_vel].dv.y() = Vy;
+                    result[i_vel].dv = Vel;
                 }
 
             }
