@@ -1,5 +1,5 @@
-#ifndef SITELLITE_HPP
-#define SITELLITE_HPP
+#ifndef SATELLITE_HPP
+#define SATELLITE_HPP
 
 #include <Eigen/Dense>
 #include <cmath>

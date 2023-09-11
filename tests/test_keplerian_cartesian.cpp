@@ -3,9 +3,8 @@
  
 #include <gtest/gtest.h>
 
-#include "sitellite.hpp"
+#include "satellite.hpp"
 #include <Eigen/Dense>
-
 
 TEST(Keplerian, definition_1) {
     const Keplerian A{10., 1./std::sqrt(2), 0.3, 3.};
